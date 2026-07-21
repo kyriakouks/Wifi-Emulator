@@ -1,6 +1,6 @@
 # Wifi-Emulator
 
-A self-contained fixed-node Wi-Fi simulation written in Python.
+A fixed-node Wi-Fi simulation written in Python
 
 ## Features
 
@@ -12,15 +12,14 @@ A self-contained fixed-node Wi-Fi simulation written in Python.
   - Background
 - Deterministic contention behavior using a configurable random seed
 - Fixed one-way medium delay of exactly **5 ms**
-- No external Python dependencies
 
-The 5 ms value is modeled as a fixed one-way propagation/medium delay. It is
-a time delay, not a physical distance measurement.
+The 5 ms value is modeled as a fixed one-way propagation delay
 
-This is a lightweight MAC/QoS simulation inspired by 802.11aa. It is not a
-full PHY-level implementation of every 802.11aa feature.
+This is a lightweight MAC/QoS simulation inspired by 802.11aa. It is **not** a full PHY-level implementation of every 802.11aa feature.
 
 ## Usage
+
+Run the simulation with default settings:
 
 ```bash
 python main.py

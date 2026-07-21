@@ -22,9 +22,9 @@ MAX_RETRIES = 4
 @dataclass(frozen=True)
 class AccessCategory:
     name: str
-    aifs_slots: int
-    cw_min: int
-    cw_max: int
+    aifs_slots: int  # waiting time before attempting transmission
+    cw_min: int  # minimum contention window size
+    cw_max: int  # maximum contention window size
     priority: int
 
 
@@ -357,7 +357,7 @@ class FixedWifiSimulation:
 
 
 def parse_args() -> argparse.Namespace:
-    # The topology and 5 ms medium delay remain fixed; these options only
+    # The topology and 5 ms medium delay remain fixed. These options only
     # control how long traffic is generated and how reproducible it is.
     parser = argparse.ArgumentParser(
         description="Run a fixed-node 802.11aa-oriented Wi-Fi simulation."
