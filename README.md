@@ -4,20 +4,18 @@ A fixed-node Wi-Fi simulation written in Python
 
 ## Features
 
-- One fixed access point and four fixed stations (`STA-1` through `STA-4`)
-- Four generic EDCA access categories: `AC-1`, `AC-2`, `AC-3`, and `AC-4`
-- Category-specific AIFS, contention-window, and priority settings are
-  preserved without assigning application meanings to the generic categories
+- One access point `AP` and four stations (`STA-1` through `STA-4`)
+- Four EDCA access categories: `voice`, `video`, `best-effort` and `background`
 - Every generated packet is assigned one category randomly and independently
   of its source station
-- Packets are placed in, selected from, and requeued into queues using their
+- Packets are placed in, selected from and requeued into queues using their
   own `access_category`; invalid category identifiers are rejected
 - At least five packets are generated and delivered for each station by
-  default, including for short simulations
+  default, even for short simulations
 - Deterministic contention behavior using a configurable random seed
 - Fixed one-way medium delay of exactly **5 ms**
 
-The 5 ms value is modeled as a fixed one-way propagation delay for every
+The 5 ms value is a fixed one-way propagation delay for every
 successful station-to-access-point transmission.
 
 This is a lightweight MAC/QoS simulation inspired by 802.11aa. It is **not** a full PHY-level implementation of every 802.11aa feature.

@@ -22,20 +22,20 @@ MAX_RETRIES = 4
 @dataclass(frozen=True)
 class AccessCategory:
     name: str
-    aifs_slots: int  # waiting time before attempting transmission
+    aifs: int  # waiting time before attempting transmission
     cw_min: int  # minimum contention window size
     cw_max: int  # maximum contention window size
     priority: int
 
 
-# Generic EDCA categories deliberately do not identify an application type.
-# Their AIFS, contention windows, and priorities retain the existing
-# category-specific contention behavior.
+# Standard 802.11e/802.11aa EDCA access categories. Each category has its
+# own AIFS, contention window, and priority value. Stations are generic;
+# the category is chosen randomly per packet, not locked to a station.
 ACCESS_CATEGORIES = {
-    "AC-1": AccessCategory("AC-1", 2, 3, 7, 4),
-    "AC-2": AccessCategory("AC-2", 2, 7, 15, 3),
-    "AC-3": AccessCategory("AC-3", 3, 15, 1023, 2),
-    "AC-4": AccessCategory("AC-4", 7, 15, 1023, 1),
+    "voice":       AccessCategory("voice",       2, 3,  7,    4),
+    "video":       AccessCategory("video",       2, 7,  15,   3),
+    "best-effort": AccessCategory("best-effort", 3, 15, 1023, 2),
+    "background":  AccessCategory("background",  7, 15, 1023, 1),
 }
 ACCESS_CATEGORY_POOL = tuple(ACCESS_CATEGORIES)
 DEFAULT_MINIMUM_PACKETS_PER_STATION = 5
@@ -83,8 +83,8 @@ class Event:
 class Node:
     name: str
     role: str
-    # Each station has one queue per generic EDCA access category. Only one
-    # packet can be waiting for the medium on behalf of a node at a time.
+    # Each station keeps one FIFO queue per EDCA category. Only one packet
+    # can be contending for the medium at a time.
     queues: dict[str, Deque[Packet]] = field(
         default_factory=lambda: {
             category: deque() for category in ACCESS_CATEGORIES
@@ -95,6 +95,11 @@ class Node:
     delivered: int = 0
     dropped: int = 0
     collisions: int = 0
+    # Counts how many packets were generated in each EDCA category. Filled
+    # during the simulation and printed in the report for each station.
+    category_counts: dict[str, int] = field(
+        default_factory=lambda: {cat: 0 for cat in ACCESS_CATEGORIES}
+    )
 
 
 class FixedWifiSimulation:
@@ -228,8 +233,9 @@ class FixedWifiSimulation:
             return
 
         self.packet_sequence += 1
-        # Generic categories are assigned randomly per packet and are
-        # independent of the packet's source station.
+        # Each packet is independently assigned a random EDCA category so that
+        # a generic station can produce any kind of traffic (voice, video,
+        # best-effort, or background) across different packets.
         category_name = self.random.choice(ACCESS_CATEGORY_POOL)
         packet = Packet(
             sequence=self.packet_sequence,
@@ -239,9 +245,10 @@ class FixedWifiSimulation:
             created_at=self.now,
             size_bytes=1200,
         )
-        # Enqueue using the packet category, not a station-wide traffic label.
         self.enqueue_packet(node, packet)
         node.generated += 1
+        # Track how many packets of each EDCA category this station produced.
+        node.category_counts[category_name] += 1
         self.begin_contention(node, self.now)
 
         # Preserve interval-based generation through the requested duration,
@@ -270,7 +277,7 @@ class FixedWifiSimulation:
         # packet's access category before its attempt event is scheduled.
         packet.backoff = self.random.randint(0, category.cw_min)
         contention_delay = (
-            category.aifs_slots + packet.backoff
+            category.aifs + packet.backoff
         ) * SLOT_TIME_S
 
         node.contention_packet = packet
@@ -292,25 +299,18 @@ class FixedWifiSimulation:
 
     @staticmethod
     def dequeue_next_packet(node: Node) -> Packet | None:
-        # Filter at packet level so the packet's own category selects its EDCA
-        # priority, even if a queue was populated by external caller code.
-        best_packet: Packet | None = None
-        best_queue: Deque[Packet] | None = None
-        best_index = -1
-        best_priority = -1
-        for queue in node.queues.values():
-            for index, packet in enumerate(queue):
-                category = validate_access_category(packet.access_category)
-                if category.priority > best_priority:
-                    best_packet = packet
-                    best_queue = queue
-                    best_index = index
-                    best_priority = category.priority
-
-        if best_packet is None or best_queue is None:
-            return None
-        del best_queue[best_index]
-        return best_packet
+        # Walk queues from highest to lowest EDCA priority and return the
+        # front packet of the first non-empty one. This is standard EDCA
+        # FIFO-within-priority behaviour: voice -> video -> best-effort -> background.
+        for category in sorted(
+            ACCESS_CATEGORIES.values(),
+            key=lambda c: c.priority,
+            reverse=True,
+        ):
+            queue = node.queues[category.name]
+            if queue:
+                return queue.popleft()
+        return None
 
     @staticmethod
     def requeue_packet(node: Node, packet: Packet) -> None:
@@ -427,6 +427,14 @@ class FixedWifiSimulation:
                     f"delivered={node.delivered}, dropped={node.dropped}, "
                     f"collisions={node.collisions}"
                 )
+                # Show how many packets of each EDCA category this station
+                # produced, confirming that traffic is spread across all four
+                # discrete categories during the simulation run.
+                mix = ", ".join(
+                    f"{cat}={node.category_counts[cat]}"
+                    for cat in ACCESS_CATEGORIES
+                )
+                print(f"    traffic mix: [{mix}]")
 
 
 def parse_args() -> argparse.Namespace:
