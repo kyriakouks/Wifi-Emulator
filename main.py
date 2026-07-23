@@ -28,13 +28,25 @@ class AccessCategory:
     priority: int
 
 
-# 802.11e/802.11aa-oriented EDCA traffic classes.
+# Generic EDCA categories deliberately do not identify an application type.
+# Their AIFS, contention windows, and priorities retain the existing
+# category-specific contention behavior.
 ACCESS_CATEGORIES = {
-    "voice": AccessCategory("voice", 2, 3, 7, 4),
-    "video": AccessCategory("video", 2, 7, 15, 3),
-    "best-effort": AccessCategory("best-effort", 3, 15, 1023, 2),
-    "background": AccessCategory("background", 7, 15, 1023, 1),
+    "AC-1": AccessCategory("AC-1", 2, 3, 7, 4),
+    "AC-2": AccessCategory("AC-2", 2, 7, 15, 3),
+    "AC-3": AccessCategory("AC-3", 3, 15, 1023, 2),
+    "AC-4": AccessCategory("AC-4", 7, 15, 1023, 1),
 }
+ACCESS_CATEGORY_POOL = tuple(ACCESS_CATEGORIES)
+DEFAULT_MINIMUM_PACKETS_PER_STATION = 5
+
+
+def validate_access_category(category_name: str) -> AccessCategory:
+    """Return a configured category or reject an invalid packet category."""
+    try:
+        return ACCESS_CATEGORIES[category_name]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"Invalid access category: {category_name!r}") from error
 
 
 @dataclass
@@ -49,6 +61,11 @@ class Packet:
     size_bytes: int
     attempts: int = 0
     backoff: int = 0
+
+    def __post_init__(self) -> None:
+        # Reject invalid categories at packet creation instead of allowing a
+        # malformed packet to enter a station queue.
+        _ = validate_access_category(self.access_category)
 
 
 @dataclass(order=True)
@@ -66,9 +83,8 @@ class Event:
 class Node:
     name: str
     role: str
-    traffic_class: str | None = None
-    # Each station has one queue per EDCA access category. Only one packet
-    # can be waiting for the medium on behalf of a node at a time.
+    # Each station has one queue per generic EDCA access category. Only one
+    # packet can be waiting for the medium on behalf of a node at a time.
     queues: dict[str, Deque[Packet]] = field(
         default_factory=lambda: {
             category: deque() for category in ACCESS_CATEGORIES
@@ -89,23 +105,30 @@ class FixedWifiSimulation:
         duration_s: float = 1.0,
         packet_interval_s: float = 0.02,
         seed: int = 7,
+        minimum_packets_per_station: int = DEFAULT_MINIMUM_PACKETS_PER_STATION,
     ) -> None:
         if duration_s <= 0:
             raise ValueError("duration must be greater than zero")
         if packet_interval_s <= 0:
             raise ValueError("packet interval must be greater than zero")
+        if minimum_packets_per_station < DEFAULT_MINIMUM_PACKETS_PER_STATION:
+            raise ValueError(
+                f"minimum packets per station must be at least {DEFAULT_MINIMUM_PACKETS_PER_STATION}"
+            )
 
         self.duration_s = duration_s
         self.packet_interval_s = packet_interval_s
+        self.minimum_packets_per_station = minimum_packets_per_station
         self.random = random.Random(seed)
 
-        # Fixed topology: one AP and four fixed stations.
+        # Fixed topology: one AP and four fixed stations. Category selection is
+        # made independently for every packet, rather than per station.
         self.nodes: dict[str, Node] = {
             "AP": Node("AP", "access point"),
-            "STA-1": Node("STA-1", "station", "voice"),
-            "STA-2": Node("STA-2", "station", "video"),
-            "STA-3": Node("STA-3", "station", "best-effort"),
-            "STA-4": Node("STA-4", "station", "background"),
+            "STA-1": Node("STA-1", "station"),
+            "STA-2": Node("STA-2", "station"),
+            "STA-3": Node("STA-3", "station"),
+            "STA-4": Node("STA-4", "station"),
         }
 
         # The event heap is the simulation clock: no real-time waiting occurs.
@@ -123,6 +146,17 @@ class FixedWifiSimulation:
         self.collisions = 0
         self.total_latency = 0.0
         self.maximum_latency = 0.0
+
+        # A short run still gets the configured minimum number of packets per
+        # station. Normal duration-based generation remains unchanged when it
+        # already produces at least that many packets.
+        self.minimum_generation_end_s = (
+            self.minimum_packets_per_station - 1
+        ) * self.packet_interval_s
+        self.processing_horizon_s = (
+            max(self.duration_s, self.minimum_generation_end_s)
+            + MEDIUM_DELAY_S
+        )
 
     def schedule(
         self,
@@ -153,7 +187,10 @@ class FixedWifiSimulation:
             # Grouping is important because simultaneous attempts represent a
             # collision on a shared Wi-Fi medium.
             first_event = heapq.heappop(self.events)
-            if first_event.time > self.duration_s + MEDIUM_DELAY_S:
+            if (
+                first_event.time > self.processing_horizon_s
+                and self.minimum_deliveries_reached()
+            ):
                 break
 
             self.now = first_event.time
@@ -178,31 +215,42 @@ class FixedWifiSimulation:
                 self.handle_attempts(attempts)
 
     def handle_generate(self, event: Event) -> None:
-        if event.node_name is None or event.time > self.duration_s:
+        if event.node_name is None:
             return
 
         node = self.nodes[event.node_name]
-        if node.traffic_class is None:
+        # Generation normally follows duration/interval. For a short run, the
+        # minimum count is allowed to extend the generation stream.
+        if (
+            event.time > self.duration_s
+            and node.generated >= self.minimum_packets_per_station
+        ):
             return
 
         self.packet_sequence += 1
+        # Generic categories are assigned randomly per packet and are
+        # independent of the packet's source station.
+        category_name = self.random.choice(ACCESS_CATEGORY_POOL)
         packet = Packet(
             sequence=self.packet_sequence,
             source=node.name,
             destination="AP",
-            access_category=node.traffic_class,
+            access_category=category_name,
             created_at=self.now,
             size_bytes=1200,
         )
-        # Packets wait in the queue belonging to their EDCA traffic class.
-        node.queues[node.traffic_class].append(packet)
+        # Enqueue using the packet category, not a station-wide traffic label.
+        self.enqueue_packet(node, packet)
         node.generated += 1
         self.begin_contention(node, self.now)
 
-        # Schedule the next packet from this fixed station until the requested
-        # simulation duration has been reached.
+        # Preserve interval-based generation through the requested duration,
+        # while extending only until the station reaches the minimum count.
         next_generation = self.now + self.packet_interval_s
-        if next_generation <= self.duration_s:
+        if (
+            next_generation <= self.duration_s
+            or node.generated < self.minimum_packets_per_station
+        ):
             self.schedule(next_generation, "generate", node.name)
 
     def begin_contention(self, node: Node, start_time: float) -> None:
@@ -214,7 +262,7 @@ class FixedWifiSimulation:
         if packet is None:
             return
 
-        category = ACCESS_CATEGORIES[packet.access_category]
+        category = validate_access_category(packet.access_category)
         packet.attempts += 1
 
         # EDCA gives higher-priority traffic shorter AIFS/CW values. This is a
@@ -234,23 +282,41 @@ class FixedWifiSimulation:
         )
 
     @staticmethod
+    def enqueue_packet(node: Node, packet: Packet, front: bool = False) -> None:
+        category = validate_access_category(packet.access_category)
+        queue = node.queues[category.name]
+        if front:
+            queue.appendleft(packet)
+        else:
+            queue.append(packet)
+
+    @staticmethod
     def dequeue_next_packet(node: Node) -> Packet | None:
-        # Always inspect higher-priority queues first, which models EDCA's
-        # preference for voice/video traffic over background traffic.
-        categories = sorted(
-            ACCESS_CATEGORIES.values(),
-            key=lambda category: category.priority,
-            reverse=True,
-        )
-        for category in categories:
-            queue = node.queues[category.name]
-            if queue:
-                return queue.popleft()
-        return None
+        # Filter at packet level so the packet's own category selects its EDCA
+        # priority, even if a queue was populated by external caller code.
+        best_packet: Packet | None = None
+        best_queue: Deque[Packet] | None = None
+        best_index = -1
+        best_priority = -1
+        for queue in node.queues.values():
+            for index, packet in enumerate(queue):
+                category = validate_access_category(packet.access_category)
+                if category.priority > best_priority:
+                    best_packet = packet
+                    best_queue = queue
+                    best_index = index
+                    best_priority = category.priority
+
+        if best_packet is None or best_queue is None:
+            return None
+        del best_queue[best_index]
+        return best_packet
 
     @staticmethod
     def requeue_packet(node: Node, packet: Packet) -> None:
-        node.queues[packet.access_category].appendleft(packet)
+        # Requeue by the packet category so a collision cannot move it to a
+        # different category's queue.
+        FixedWifiSimulation.enqueue_packet(node, packet, front=True)
 
     def handle_attempts(self, attempts: list[Event]) -> None:
         # Ignore stale attempt events. A packet may have been requeued after
@@ -316,6 +382,13 @@ class FixedWifiSimulation:
         )
         self.begin_contention(node, self.medium_busy_until)
 
+    def minimum_deliveries_reached(self) -> bool:
+        return all(
+            node.delivered >= self.minimum_packets_per_station
+            for node in self.nodes.values()
+            if node.role == "station"
+        )
+
     def handle_receive(self, event: Event) -> None:
         if event.packet is None:
             return
@@ -350,9 +423,9 @@ class FixedWifiSimulation:
         for node in self.nodes.values():
             if node.role == "station":
                 print(
-                    f"  {node.name}: class={node.traffic_class}, "
-                    f"generated={node.generated}, delivered={node.delivered}, "
-                    f"dropped={node.dropped}, collisions={node.collisions}"
+                    f"  {node.name}: generated={node.generated}, "
+                    f"delivered={node.delivered}, dropped={node.dropped}, "
+                    f"collisions={node.collisions}"
                 )
 
 
@@ -365,6 +438,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration", type=float, default=1.0)
     parser.add_argument("--interval", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--minimum-packets-per-station",
+        "--packets-per-station",
+        dest="minimum_packets_per_station",
+        type=int,
+        default=DEFAULT_MINIMUM_PACKETS_PER_STATION,
+        help="minimum packets generated and delivered per station (default: 5)",
+    )
     return parser.parse_args()
 
 
@@ -374,6 +455,7 @@ def main() -> None:
         duration_s=args.duration,
         packet_interval_s=args.interval,
         seed=args.seed,
+        minimum_packets_per_station=args.minimum_packets_per_station,
     )
     simulation.start()
     simulation.report()
