@@ -72,9 +72,7 @@ class Event:
     # always processed first. sequence makes same-time events deterministic.
     time: float
     sequence: int
-    kind: str = field(compare=Fals
-
-        e)
+    kind: str = field(compare=False)
     node_name: str | None = field(default=None, compare=False)
     packet: Packet | None = field(default=None, compare=False)
 
