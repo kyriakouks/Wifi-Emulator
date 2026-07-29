@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import heapq
-import random
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Deque
+import heapq
+import random
 
 
 # All times are stored in seconds. The required fixed medium delay is
@@ -117,7 +116,7 @@ class Node:
     role: str
     # Each station keeps one FIFO queue per EDCA category. Only one packet
     # can be contending for the medium at a time.
-    queues: dict[str, Deque[Packet]] = field(
+    queues: dict[str, deque[Packet]] = field(
         default_factory=lambda: {
             category: deque() for category in ACCESS_CATEGORIES
         }
@@ -641,7 +640,7 @@ class RTSCTSWifiSimulation:
         print(f"Simulation duration: {self.duration_s:.3f} s")
         print(f"Fixed nodes: {', '.join(self.nodes)}")
         print(f"Fixed medium delay: {MEDIUM_DELAY * 1000:.3f} ms (per frame)")
-        print(f"Protocol: RTS/CTS/DATA (3 × 5ms = 15ms minimum per packet)")
+        print("Protocol: RTS/CTS/DATA (3 × 5ms = 15ms minimum per packet)")
         print(f"Transmissions (DATA frames): {self.transmitted}")
         print(f"Delivered packets: {self.delivered}")
         print(f"Total collisions: {self.collisions}")

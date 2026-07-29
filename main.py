@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import heapq
-import random
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque
-
+import heapq
+import random
 
 # All times are stored in seconds. The required fixed medium delay is
 # 5 ms = 0.005 seconds for every successful station-to-AP transmission.
@@ -74,7 +72,9 @@ class Event:
     # always processed first. sequence makes same-time events deterministic.
     time: float
     sequence: int
-    kind: str = field(compare=False)
+    kind: str = field(compare=Fals
+
+        e)
     node_name: str | None = field(default=None, compare=False)
     packet: Packet | None = field(default=None, compare=False)
 
@@ -85,7 +85,7 @@ class Node:
     role: str
     # Each station keeps one FIFO queue per EDCA category. Only one packet
     # can be contending for the medium at a time.
-    queues: dict[str, Deque[Packet]] = field(
+    queues: dict[str, deque[Packet]] = field(
         default_factory=lambda: {
             category: deque() for category in ACCESS_CATEGORIES
         }
