@@ -101,7 +101,7 @@ class Frame:
 @dataclass(order=True)
 class Event:
     # Events are kept in a min-heap, so the next event in simulation time is
-    # always processed first. sequence makes same-time events deterministic.
+    # always processed first. Sequence makes same-time events deterministic.
     time: float
     sequence: int
     kind: str = field(compare=False)
@@ -131,7 +131,7 @@ class Node:
     rts_sent: int = 0
     cts_received: int = 0
     cts_timeouts: int = 0
-    # Counts how many packets were generated in each EDCA category. Filled
+    # Counts how many packets were generated in each EDCA category, filled
     # during the simulation and printed in the report for each station.
     category_counts: dict[str, int] = field(
         default_factory=lambda: {cat: 0 for cat in ACCESS_CATEGORIES}

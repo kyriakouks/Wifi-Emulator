@@ -89,13 +89,13 @@ class StationState(Enum):
 ## Code Locations in RTS-CTS.py
 
 ### RTS Transmission
-Lines 428-473: `handle_rts_attempts()`
+Lines 436-473: `handle_rts_attempts()`
 - Station wins contention
 - Sends RTS frame
 - Waits for CTS
 
 ### CTS Response
-Lines 475-497: `handle_receive_rts()`
+Lines 475-493: `handle_receive_rts()`
 - AP receives RTS
 - Immediately sends CTS back
 
