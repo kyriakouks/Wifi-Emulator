@@ -1,178 +1,256 @@
-# Wi-Fi Emulator — Lightweight IEEE 802.11aa Groupcast Model
+# IEEE 802.11aa Reliable Multicast Analysis
 
-A dependency-free, discrete-event Python simulation that demonstrates the
-MAC-level reliability differences between legacy multicast and the
-IEEE 802.11aa **Groupcast with Retries (GCR)** services.
+A dependency-free Python implementation of the analytical saturation model from:
 
-The model deliberately omits PHY behavior. It is intended to make groupcast
-control and retry decisions observable, not to predict real radio performance.
+> *Performance Analysis and Algorithm Selection for Reliable Multicast in
+> IEEE 802.11aa Wireless LAN*
 
-## What the simulator models
+The program calculates the paper's main outputs as **tables**, not figures:
 
-### Fixed topology and delay
+- Multicast reliability, `ηm` (the average per-receiver delivery probability,
+  not the probability that every group member receives a frame)
+- Multicast saturation throughput, `Sm`
+- Aggregate unicast saturation throughput, `Su`
+- Reliability-constrained LogRD utility
+- Selected multicast mechanism for a given number of receivers and unicast
+  contenders
 
-- One AP and four fixed group members: `STA-1` through `STA-4`
-- AP-originated group-addressed traffic sent to all four stations
-- Every AP-to-station and station-to-AP transmission has a fixed **5 ms delay**
-- No distance, SNR, modulation, coding, interference, capture effect, or rate
-  adaptation calculation changes those delays
+The repository includes the referenced PDF and a detailed implementation guide
+in [PAPER-MODEL-GUIDE.md](PAPER-MODEL-GUIDE.md).
 
-### Three group-addressed delivery modes
+## Important model change
 
-| Mode | Behavior | Feedback | Retry decision |
-| --- | --- | --- | --- |
-| `legacy` | One group DATA frame | None | Never retries |
-| `gcr-ur` | GCR unsolicited retry | None | Always sends the configured number of extra DATA copies |
-| `gcr-ba` | Lightweight GCR Block Ack | Per-receiver Block Ack reports aggregated at the AP | Retries only while at least one member has not acknowledged the packet |
+The earlier fixed-distance/fixed-delay event simulation has been replaced.
+There is no longer a 5 ms propagation delay or periodic packet-generation
+interval. The paper studies **saturation**, so:
 
-`gcr-ur` represents the important **no-feedback** property of GCR Unsolicited
-Retry. It can repair missed receivers, but it sends every configured copy even
-when all receivers already got the first one.
+- the AP always has multicast traffic available;
+- every unicast station always has unicast traffic available;
+- DCF attempt and collision probabilities are solved analytically; and
+- DATA/control frame airtime comes from frame sizes and selected bit rates.
 
-`gcr-ba` represents the important **feedback-driven** property of GCR Block
-Ack. The AP learns which receivers accepted the packet and retransmits only
-when the aggregate feedback shows that a receiver is still missing it.
+No path loss, SNR, fading, modulation waveform, or detailed PHY is simulated.
+PHY behavior is reduced to the paper's rates and BER-to-FER calculation.
 
-The full standard contains detailed GCR membership, control-frame, and Block
-Ack rules. This simulator intentionally abstracts those details into a
-serialized feedback window so the reliability difference is clear and no PHY
-collision model is needed. See [802.11aa-GROUPCAST-GUIDE.md](802.11aa-GROUPCAST-GUIDE.md)
-for the exact simplifications.
+## Implemented mechanisms
 
-### EDCA-style traffic selection
+| CLI name | Paper mechanism |
+| --- | --- |
+| `legacy` | No-Ack/No-Retry legacy multicast |
+| `gcr-ur` | GCR Unsolicited Retry |
+| `dms` | Directed Multicast Service |
+| `immediate-ba` | GCR Immediate Block Ack |
+| `delayed-ba` | GCR Delayed Block Ack analytical comparison |
 
-Every group packet is assigned one pseudo-random access category:
+The paper notes that Delayed Block Ack is an analytical extension of delayed
+unicast Block Ack rather than an explicit 802.11aa GCR service.
 
-- `voice`
-- `video`
-- `best-effort`
-- `background`
+## Paper parameters
 
-The AP holds one FIFO queue per category and selects the highest-priority
-non-empty queue. Its AIFS and `CWmin` determine a small EDCA-style delay before
-the AP transmits a new group packet.
+The default `ModelParameters` values reproduce Table I where the PDF provides
+numerical values:
 
-This is not a full 802.11aa EDCA implementation: it does not model
-separate internal contention entities, virtual collisions, slot-by-slot
-freeze/resume, or competing APs. EDCA is included only to show priority-aware
-traffic scheduling around the 802.11aa groupcast comparison.
+| Parameter | Default |
+| --- | ---: |
+| Multicast payload | 1500 bytes |
+| Unicast payload | 1500 bytes |
+| Legacy multicast rate | 6 Mb/s |
+| GCR/DMS/Block Ack DATA rate | 54 Mb/s |
+| Unicast DATA rate | 54 Mb/s |
+| Control rate | 6 Mb/s |
+| Legacy BER | `1e-6` |
+| GCR/DMS/Block Ack BER | `1e-5` |
+| Unicast BER | `0` |
+| GCR-UR retries | 2 (`R + 1 = 3` copies) |
+| DMS/unicast retry limit | 8 |
+| Block Ack MSDU lifetime | 400 ms |
+| Block Ack burst size | 10 frames |
+| Multicast `{CWmin, max stage}` | `{16, 0}` |
+| Unicast `{CWmin, max stage}` | `{32, 5}` |
+| LogRD reliability threshold | 90% |
 
-## Abstract receiver misses
+### Timing constants omitted by the paper
 
-A groupcast reliability comparison needs some receivers to miss initial DATA
-copies. The option `--receiver-miss-probability` controls an **abstract,
-deterministic MAC-level receiver miss input**:
+The PDF does not give numerical values for the empty slot, SIFS, DIFS, PLCP,
+MAC header/FCS, ACK, or Block Ack control lengths. The implementation therefore
+uses explicit common 802.11a defaults:
 
-- It is **not** calculated from the PHY, distance, signal strength, or channel
-  conditions.
-- It is derived only from the seed, packet number, station, and DATA copy
-  number.
-- Therefore the same packet/member/copy has the same outcome across `legacy`,
-  `gcr-ur`, and `gcr-ba` comparisons.
-- Set it to `0` for a perfect, lossless medium.
+| Parameter | Default used by this project |
+| --- | ---: |
+| Empty slot | 9 µs |
+| SIFS | 16 µs |
+| DIFS | 34 µs |
+| PLCP preamble/header time | 20 µs |
+| MAC header + FCS | 34 bytes |
+| ACK | 14 bytes |
+| Common BAR/BA control length (`BACK`) | 32 bytes |
 
-The default is `0.20`, which makes the reliability and overhead trade-offs
-visible. The model does not claim that this value represents a physical packet
-error rate.
+These values are visible in `ModelParameters` and can be changed in code. They
+must not be interpreted as values explicitly stated by the paper. Exact
+numerical reproduction of the original OMNeT++ output requires the authors'
+missing simulator configuration.
 
 ## Requirements
 
 - Python 3.10 or later
-- No external packages
+- No third-party packages
 
-## Usage
+## Basic comparison table
 
-Run all modes side by side (the default):
+Run the paper's common baseline of ten multicast receivers and ten saturated
+unicast stations:
 
 ```bash
 python main.py
 ```
 
-Example comparison with a fixed seed:
+Equivalent explicit command:
 
 ```bash
-python main.py --mode all --duration 1 --interval 0.02 --seed 7
+python main.py --receivers 10 --unicast-stations 10
 ```
 
-Run a detailed report for one mode:
+The output contains one row per mechanism:
 
-```bash
-python main.py --mode gcr-ba --gcr-retries 2 --receiver-miss-probability 0.20
+```text
+Mechanism        Reliab.  Sm Mbps  Su Mbps  Utility  tau_m  p_cm  BA R
 ```
 
-Run a perfect-medium comparison with no abstract receiver misses:
+`BA R` is the effective retry count obtained from the 400 ms Block Ack MSDU
+lifetime approximation.
 
-```bash
-python main.py --mode all --receiver-miss-probability 0
+The row marked `*` is selected by the paper's LogRD criterion:
+
+```text
+utility = min(Sm / (1 + ln(Nrx)), (Su / Nu))
 ```
 
-Generate at least five AP group packets, even for a very short generation
-window:
+A mechanism receives zero utility if its reliability is below the configured
+threshold. If every mechanism is below the threshold, no winner is marked and
+the program reports that no feasible mechanism exists.
+
+## Reliability and throughput curve data as tables
+
+### Sweep multicast receivers
+
+Hold `Nu = 10` and evaluate `Nrx = 1…30`, corresponding to the receiver sweep
+used by the paper:
 
 ```bash
-python main.py --duration 0.001 --minimum-group-packets 5
+python main.py \
+  --sweep receivers \
+  --sweep-start 1 \
+  --sweep-end 30 \
+  --unicast-stations 10
+```
+
+This prints one row per receiver count and mechanism with:
+
+- reliability;
+- multicast throughput;
+- unicast throughput;
+- LogRD utility; and
+- whether the mechanism was selected.
+
+Print only the selected mechanism at each point:
+
+```bash
+python main.py --sweep receivers --selection-only --unicast-stations 12
+```
+
+The `Nu = 12` selection sweep corresponds to the illustrative scenario in the
+paper's mechanism-selection section. It is useful for comparison, but the
+current executable assumptions do not reproduce Figure 13's exact winner
+boundaries; see **Known benchmark gap** below.
+
+### Sweep unicast contenders
+
+Hold `Nrx = 10` and evaluate `Nu = 1…30`:
+
+```bash
+python main.py \
+  --sweep unicast \
+  --sweep-start 1 \
+  --sweep-end 30 \
+  --receivers 10
+```
+
+### CSV output
+
+All sweep data can be redirected to a CSV file without generating figures:
+
+```bash
+python main.py \
+  --sweep receivers \
+  --format csv \
+  --unicast-stations 10 \
+  > receiver-sweep.csv
 ```
 
 ## Command-line options
 
 | Option | Default | Meaning |
-| --- | --- | --- |
-| `--mode` | `all` | `legacy`, `gcr-ur`, `gcr-ba`, or an all-mode comparison |
-| `--duration` | `1.0` | Normal group-packet generation window in seconds |
-| `--interval` | `0.02` | Time between generated AP group packets in seconds |
-| `--seed` | `7` | Seed for AP backoff and deterministic traffic/outcome generation |
-| `--minimum-group-packets` | `5` | Minimum number of AP group packets to generate |
-| `--gcr-retries` | `2` | Extra DATA copies available to either GCR mode |
-| `--receiver-miss-probability` | `0.20` | Abstract independent per-copy receiver miss input; not a PHY model |
+| --- | ---: | --- |
+| `--receivers` | `10` | Number of multicast receivers, `Nrx` (`1…30`) |
+| `--unicast-stations` | `10` | Number of saturated unicast stations, `Nu` (`1…30`) |
+| `--sweep` | `none` | `none`, `receivers`, or `unicast` |
+| `--sweep-start` | `1` | First sweep value |
+| `--sweep-end` | `30` | Last sweep value |
+| `--selection-only` | off | Show only the LogRD winner during a sweep |
+| `--format` | `table` | `table` or `csv` sweep output |
+| `--reliability-threshold` | `0.90` | Minimum reliability accepted by LogRD |
 
 ## Tests
 
-The included tests use only Python's standard-library `unittest` module:
+Run the standard-library test suite:
 
 ```bash
 python -m unittest -v
 ```
 
-They verify the five-packet minimum, the fixed 5 ms DATA delay, the
-no-feedback legacy path, fixed GCR-UR copies, and feedback-driven GCR-BA
-behavior.
+The tests verify:
 
-## Interpreting the results
+- Table I BER-to-FER values;
+- slot-probability normalization;
+- expected reliability and throughput trends;
+- common Block Ack collision correlation;
+- MSDU-lifetime retry timing without burst double counting;
+- DMS scalability behavior;
+- numerical stability across both complete 1–30 sweeps;
+- parameter and CLI validation;
+- no-feasible-mechanism selection;
+- CSV row/line-ending correctness; and
+- reliability-constrained LogRD selection.
 
-The all-mode table reports:
+## Reproduction limits
 
-- **Complete**: group packets received by all four stations
-- **Partial**: group packets with one or more stations missing the packet after
-  the delivery procedure completes
-- **Delivery**: unique station deliveries divided by all possible group
-  deliveries
-- **DATA**: group DATA frames sent by the AP
-- **BA**: Block Ack feedback frames sent by group members; only GCR Block Ack
-  uses these in this model
-- **Retries**: extra group DATA copies sent after the initial transmission
+The code follows the paper's equations and Table I parameters, but some exact
+paper outputs cannot be guaranteed because the publication omits timing/frame
+constants and contains several ambiguous or malformed equations. The project
+uses documented executable interpretations for:
 
-Expected behavior with nonzero receiver misses:
+- acknowledged DMS timing;
+- the DMS per-receiver attempt denominator;
+- lifetime-to-retry rounding;
+- Block Ack expected transmission count with collision correlation; and
+- delayed Block Ack lifetime/retry timing.
 
-1. `legacy` sends the fewest frames but gives the lowest group delivery ratio.
-2. `gcr-ur` usually improves delivery, but has fixed retry overhead even when
-   no receiver needs another copy.
-3. `gcr-ba` spends feedback overhead and retries only when aggregate feedback
-   identifies missing receivers; it can avoid unnecessary DATA retries.
+Inputs are deliberately limited to the paper's evaluated `Nrx, Nu = 1…30`
+range. Invalid probabilities, rates, timings, retry stages, and reversed sweep
+ranges are rejected rather than converted into plausible-looking output.
 
-## Scope and non-goals
+### Known benchmark gap
 
-This is a **lightweight 802.11aa-inspired GCR comparison**, not a conformance
-implementation of IEEE 802.11aa. It does not implement:
+The model reproduces important reported trends—Immediate Block Ack maximizes
+multicast throughput, DMS multicast throughput falls with receiver count,
+legacy reliability is lowest, and feedback methods approach 100% reliability.
+However, its `Nu=12` LogRD selection map does **not** reproduce Figure 13's
+published winner regions: the current assumptions select GCR-UR for much of
+the middle receiver range where the paper reports Immediate Block Ack.
 
-- Complete GCR Block Ack control-frame semantics, membership procedures, or
-  sequence bitmaps
-- Stream Classification Service (SCS), TSPEC/TCLAS, admission control, HCCA,
-  or intra-access-category prioritization
-- Overlapping-BSS coordination
-- 802.1 AVB/802.1Q stream-reservation interworking
-- RTS/CTS, NAV, SIFS/DIFS timing accuracy, normal unicast ACKs, or PHY effects
-- Multicast power-save delivery, aggregation, rate adaptation, or channel loss
-  derived from a radio model
-
-For the feature mapping and event sequence, see
-[802.11aa-GROUPCAST-GUIDE.md](802.11aa-GROUPCAST-GUIDE.md).
+This is a known validation gap, not a hidden success claim. The remaining
+difference is sensitive to omitted simulator timing/frame constants and the
+paper's ambiguous DMS/Block Ack equations. Use the output for analytical
+experimentation and trend comparison; do not cite its exact selection
+boundaries as a reproduction of the published figure without calibrating the
+missing original simulator configuration.
