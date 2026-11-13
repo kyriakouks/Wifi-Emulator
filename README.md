@@ -212,15 +212,12 @@ The tests verify:
 
 - Table I BER-to-FER values;
 - slot-probability normalization;
-- expected reliability and throughput trends;
-- common Block Ack collision correlation;
-- MSDU-lifetime retry timing without burst double counting;
-- DMS scalability behavior;
-- numerical stability across both complete 1–30 sweeps;
-- parameter and CLI validation;
+- baseline reliability, throughput, and selection trends;
+- DMS throughput scaling with receiver count;
+- finite, physical results throughout the complete `Nrx, Nu = 1…30` domain;
+- parameter validation;
 - no-feasible-mechanism selection;
-- CSV row/line-ending correctness; and
-- reliability-constrained LogRD selection.
+- CSV row and line-ending correctness.
 
 ## Reproduction limits
 

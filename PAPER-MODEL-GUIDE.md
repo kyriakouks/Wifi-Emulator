@@ -75,8 +75,11 @@ For mechanisms with fixed multicast contention behavior, paper Eq. (18) is:
 tau_m = 2 / (CWmin_m + 1)
 ```
 
-The unicast fixed point follows paper Eqs. (19)–(20). The code solves it with
-damping and a tolerance defined in `ModelParameters`.
+The unicast fixed point follows paper Eqs. (19)–(20). The code evaluates
+Eq. (19)'s closed form, including the `(1 - 2p_eu)` factor in its final
+denominator term. At its removable singular points (`p_eu = 0.5` and `1`), it
+uses the equivalent finite retry/backoff sum. The fixed point uses damping and
+a tolerance defined in `ModelParameters`.
 
 Delayed Block Ack uses paper Eq. (60) for its mechanism-specific `tau_m` and is
 solved jointly with the unicast fixed point.
